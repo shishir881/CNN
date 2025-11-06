@@ -1,0 +1,3 @@
+envir/
+__pycache__/
+*.pt

@@ -1,0 +1,23 @@
+# Ignore Python virtual environment
+envir/
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.so
+
+# IDE and OS files
+.vscode/
+.DS_Store
+
+# Model and large data files
+*.pt
+*.h5
+*.onnx
+*.weights
+
+
+
+
+XX
