@@ -1,0 +1,218 @@
+# ============================
+# Low Light Object Partition Comparison (Full vs Tiled)
+# Author: Gemini
+# ============================
+
+import cv2
+import numpy as np
+import matplotlib.pyplot as plt
+from ultralytics import YOLO
+from tkinter import Tk, filedialog
+import copy
+
+class LowLightEnhancer:
+    """
+    Helper class to brighten dark images so YOLO can see better.
+    """ 
+    def __init__(self, clip_limit=3.0, tile_grid_size=(8, 8)):
+        self.clahe = cv2.createCLAHE(clipLimit=clip_limit, tileGridSize=tile_grid_size)
+
+    def enhance(self, image_bgr):
+        lab = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2LAB)
+        l, a, b = cv2.split(lab)
+        l_enhanced = self.clahe.apply(l)
+        lab_enhanced = cv2.merge((l_enhanced, a, b))
+        enhanced_bgr = cv2.cvtColor(lab_enhanced, cv2.COLOR_LAB2BGR)
+        return enhanced_bgr
+
+def draw_boxes(image, boxes, classes, confs, names, title, color=(0, 255, 0)):
+    """
+    Draws bounding boxes on an image for visualization.
+    """
+    img_copy = image.copy()
+    for box, cls, conf in zip(boxes, classes, confs):
+        x1, y1, x2, y2 = map(int, box)
+        label = f"{names[int(cls)]} {conf:.2f}"
+        
+        cv2.rectangle(img_copy, (x1, y1), (x2, y2), color, 2)
+        
+        # Label background
+        (w, h), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
+        cv2.rectangle(img_copy, (x1, y1 - 20), (x1 + w, y1), color, -1)
+        cv2.putText(img_copy, label, (x1, y1 - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+    
+    # Add title
+    cv2.putText(img_copy, title, (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 0), 2)
+    return img_copy
+
+def run_tiled_inference(model, img, tile_rows=2, tile_cols=2, overlap_ratio=0.2, conf=0.25):
+    """
+    Splits image into overlapping tiles, runs inference, and uses NMS to merge results.
+    """
+    h_img, w_img, _ = img.shape
+    
+    # Calculate tile size based on desired grid (approximate)
+    # We want roughly tile_rows * tile_cols, but with overlap
+    tile_h = int(h_img / tile_rows)
+    tile_w = int(w_img / tile_cols)
+    
+    step_h = int(tile_h * (1 - overlap_ratio))
+    step_w = int(tile_w * (1 - overlap_ratio))
+    
+    all_boxes = []
+    all_classes = []
+    all_confs = []
+    
+    print(f"   -> Running Tiled Inference with {overlap_ratio*100}% overlap...")
+    
+    # Sliding window loop
+    for y in range(0, h_img, step_h):
+        for x in range(0, w_img, step_w):
+            # Ensure tile doesn't go out of bounds
+            y2 = min(y + tile_h, h_img)
+            x2 = min(x + tile_w, w_img)
+            y1 = max(0, y2 - tile_h) # Adjust start if we hit the edge
+            x1 = max(0, x2 - tile_w)
+            
+            # Crop tile
+            tile = img[y1:y2, x1:x2]
+            
+            # Run inference
+            results = model(tile, conf=conf, verbose=False, agnostic_nms=True)
+            
+            for box in results[0].boxes:
+                xyxy = box.xyxy[0].cpu().numpy()
+                cls = box.cls[0].cpu().numpy()
+                conf_val = box.conf[0].cpu().numpy()
+                
+                # Filter: Ignore boxes touching the tile edge (likely partial objects)
+                # unless the tile edge is also the image edge
+                bx1, by1, bx2, by2 = xyxy
+                margin = 5 # pixels
+                
+                on_left_edge = (bx1 < margin) and (x1 > 0)
+                on_right_edge = (bx2 > (x2-x1) - margin) and (x2 < w_img)
+                on_top_edge = (by1 < margin) and (y1 > 0)
+                on_bottom_edge = (by2 > (y2-y1) - margin) and (y2 < h_img)
+                
+                if on_left_edge or on_right_edge or on_top_edge or on_bottom_edge:
+                   continue # Skip this partial detection, the next tile will catch it fully
+
+                # Offset coordinates to global space
+                global_box = [
+                    xyxy[0] + x1, 
+                    xyxy[1] + y1, 
+                    xyxy[2] + x1, 
+                    xyxy[3] + y1
+                ]
+                
+                all_boxes.append(global_box)
+                all_classes.append(int(cls))
+                all_confs.append(float(conf_val))
+
+    # --- Global NMS (Non-Maximum Suppression) ---
+    # This merges duplicate boxes found in the overlap regions
+    if len(all_boxes) > 0:
+        indices = cv2.dnn.NMSBoxes(
+            bboxes=all_boxes, 
+            scores=all_confs, 
+            score_threshold=conf, 
+            nms_threshold=0.45 # Threshold to merge boxes (0.5 is standard)
+        )
+        
+        final_boxes = []
+        final_classes = []
+        final_confs = []
+        
+        # Robust handling for indices returned by NMSBoxes
+        if len(indices) > 0:
+            # Flatten to ensure we have a simple list of indices/integers
+            if isinstance(indices, tuple):
+                indices = indices[0]
+            indices = np.array(indices).flatten()
+            
+            for i in indices:
+                idx = int(i) # Safely convert numpy scalar to python int
+                final_boxes.append(all_boxes[idx])
+                final_classes.append(all_classes[idx])
+                final_confs.append(all_confs[idx])
+            
+        return np.array(final_boxes), np.array(final_classes), np.array(final_confs)
+    else:
+        return np.array([]), np.array([]), np.array([])
+
+def main():
+    # 1. Select Image
+    print("Opening file dialog...")
+    root = Tk()
+    root.withdraw()
+    image_path = filedialog.askopenfilename(title="Select Low Light Image")
+    if not image_path: return
+
+    # 2. Load Model
+    print("Loading YOLO11n...")
+    model = YOLO('yolo11n.pt') 
+
+    # 3. Enhance Image
+    print(f"Processing: {image_path}")
+    original = cv2.imread(image_path)
+    enhancer = LowLightEnhancer()
+    img = enhancer.enhance(original)
+    img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+
+    # 4. METHOD A: Full Image Detection
+    print("Running Method A: Full Image Detection...")
+    results_full = model(img, conf=0.25, iou=0.5, verbose=False)
+    
+    if len(results_full[0].boxes) > 0:
+        boxes_full = results_full[0].boxes.xyxy.cpu().numpy()
+        classes_full = results_full[0].boxes.cls.cpu().numpy()
+        confs_full = results_full[0].boxes.conf.cpu().numpy()
+    else:
+        boxes_full, classes_full, confs_full = [], [], []
+    
+    # 5. METHOD B: Smart Tiled Detection (Overlap + NMS)
+    print("Running Method B: Smart Tiled Partition Detection...")
+    boxes_tiled, classes_tiled, confs_tiled = run_tiled_inference(
+        model, img, tile_rows=2, tile_cols=2, overlap_ratio=0.25
+    )
+    
+    # 6. Compare Stats
+    count_full = len(boxes_full)
+    avg_conf_full = np.mean(confs_full) if count_full > 0 else 0
+    
+    count_tiled = len(boxes_tiled)
+    avg_conf_tiled = np.mean(confs_tiled) if count_tiled > 0 else 0
+    
+    print("\n" + "="*40)
+    print(f"COMPARISON RESULTS")
+    print("="*40)
+    print(f"Standard Detection: {count_full} objects (Avg Conf: {avg_conf_full:.2f})")
+    print(f"Smart Tiled:        {count_tiled} objects (Avg Conf: {avg_conf_tiled:.2f})")
+    print("="*40 + "\n")
+
+    # 7. Visualization
+    vis_full = draw_boxes(img_rgb, boxes_full, classes_full, confs_full, model.names, 
+                          f"Standard: {count_full} Objects", color=(255, 0, 0)) # Red
+    
+    vis_tiled = draw_boxes(img_rgb, boxes_tiled, classes_tiled, confs_tiled, model.names, 
+                           f"Smart Tiled: {count_tiled} Objects", color=(0, 255, 0)) # Green
+
+    # Plot Side by Side
+    plt.figure(figsize=(18, 10))
+    
+    plt.subplot(1, 2, 1)
+    plt.imshow(vis_full)
+    plt.title("Standard YOLO Detection\n(Red Boxes)", fontsize=14)
+    plt.axis('off')
+    
+    plt.subplot(1, 2, 2)
+    plt.imshow(vis_tiled)
+    plt.title("Smart Partitioned Detection (Overlap + NMS)\n(Green Boxes)", fontsize=14)
+    plt.axis('off')
+    
+    plt.tight_layout()
+    plt.show()
+
+if __name__ == "__main__":
+    main()
