@@ -66,6 +66,15 @@ def run_tiled_inference(model, img, tile_rows=2, tile_cols=2, overlap_ratio=0.25
     return all_boxes, all_classes, all_confs
 
 def main():
+    """
+    Main entry point for the Hybrid Object Detection program.
+    It uses a Low Light Enhancer to preprocess the image, then runs
+    a two-stage object detection system:
+    1. Full image pass using standard detection (for big objects)
+    2. Tiled pass to detect small objects missed in the full pass
+    Finally, it merges results using Non-Maximum Suppression (NMS).
+    """
+    print("Select Low Light Image...")  
     root = Tk()
     root.withdraw()
     image_path = filedialog.askopenfilename(title="Select Low Light Image")

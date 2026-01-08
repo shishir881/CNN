@@ -22,7 +22,7 @@ if not image_path:
 
 # STEP 3: Load pre-trained YOLOv8 model
 print("Loading YOLOv8 model...")
-model = YOLO('yolov8n.pt')  # You can use yolov8s.pt or yolov8m.pt for better accuracy
+model = YOLO('yolo11n.pt')  # You can use yolov8s.pt or yolov8m.pt for better accuracy
 
 # STEP 4: Perform detection
 print("Detecting objects...")
