@@ -1,7 +1,3 @@
-# ============================
-# Image Object Partition using YOLOv8
-# Author: Shishir + ChatGPT
-# ============================
 
 # STEP 1: Import libraries
 import cv2

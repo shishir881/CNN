@@ -1,7 +1,3 @@
-# ============================
-# Low Light Object Partition Comparison (Full vs Tiled)
-# Author: Gemini
-# ============================
 
 import cv2
 import numpy as np
