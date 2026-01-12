@@ -1,7 +1,6 @@
 # ============================
 # YOLO11 Comprehensive Detection Dashboard
 # Methods: Standard vs Tiled vs Hybrid
-# Author: Gemini
 # ============================
 
 import cv2
